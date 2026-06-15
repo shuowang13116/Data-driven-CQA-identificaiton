@@ -105,21 +105,23 @@ def stream_map(blob: bytes) -> dict[str, bytes]:
     return out
 
 
-def is_function_ole(streams: dict[str, bytes], visible_slide_text: str = "") -> tuple[bool, str]:
+def classify_endpoint(streams: dict[str, bytes], visible_slide_text: str = "") -> tuple[str | None, str, str]:
     contents = clean_text(streams.get("CONTENTS", b""))
     preview_text = "\n".join(clean_text(data) for name, data in streams.items() if "OlePres" in name)
     has_function_axis = "敲除" in contents or "knockout" in contents.lower() or "function" in contents.lower()
     has_function_preview = "敲除" in preview_text or "knockout" in preview_text.lower() or "function" in preview_text.lower()
     has_cell_share = "细胞占比" in contents or "viability" in contents.lower() or "population" in contents.lower()
-    if has_function_axis or has_function_preview:
-        evidence = "y-axis/visible chart contains 敲除率"
-        return True, evidence
+    has_cell_share_preview = "细胞占比" in preview_text or "viability" in preview_text.lower() or "population" in preview_text.lower()
     if has_cell_share:
-        return False, "excluded: y-axis contains 细胞占比/cell-state"
+        return "cell_share_pct", "细胞占比%", "y-axis contains 细胞占比%"
+    if has_cell_share_preview:
+        return "cell_share_pct", "细胞占比%", "visible chart contains 细胞占比%"
+    if has_function_axis or has_function_preview:
+        return "knockout_rate_pct", "敲除率（%）", "y-axis/visible chart contains 敲除率"
     if "敲除" in visible_slide_text or "knockout" in visible_slide_text.lower() or "功能" in visible_slide_text:
         if "Prism" in clean_text(streams.get("\x01CompObj", b"")):
-            return True, "visible slide title contains 敲除率; OLE is Prism and does not contain 细胞占比"
-    return False, "excluded: no function/knockout y-axis evidence"
+            return "knockout_rate_pct", "敲除率（%）", "visible slide title contains 敲除率; OLE is Prism and does not contain 细胞占比"
+    return None, "", "excluded: no supported y-axis evidence"
 
 
 def label_needles(label: str) -> list[bytes]:
@@ -166,6 +168,131 @@ def candidate_floats(blob: bytes, idx: int) -> list[tuple[int, float]]:
     return vals
 
 
+def label_before_value(blob: bytes, off: int) -> str:
+    raw = blob[max(0, off - 96) : off]
+    text = raw.decode("gb18030", errors="ignore")
+    text = "".join(ch if ch.isprintable() else " " for ch in text)
+    tokens = re.findall(r"[A-Za-z0-9_()+%.\-]*[\u4e00-\u9fffA-Za-z][A-Za-z0-9_()+%.\-\u4e00-\u9fff]*", text)
+    junk = {
+        "MT",
+        "ITC",
+        "New",
+        "BT",
+        "BISansCond",
+        "Light",
+        "Gisha",
+        "Sans",
+        "Arial",
+        "Qa",
+        "en",
+        "HY",
+        "HGS",
+        "M-PRO",
+        "oPOP",
+        "Typewriter",
+        "CharterITCReg",
+        "RDC.tmp",
+        "ZDingbats",
+    }
+    tokens = [tok for tok in tokens if tok not in junk and len(tok) >= 2]
+    return tokens[-1].strip("-") if tokens else ""
+
+
+def plausible_group_label(label: str) -> bool:
+    if not label or label in CONTROL_LABELS:
+        return False
+    if len(label) > 48:
+        return False
+    if not re.fullmatch(r"[A-Za-z0-9_()+%.\-\u4e00-\u9fff]+", label):
+        return False
+    if not re.search(r"[A-Za-z0-9]", label) and label not in LABELS:
+        return False
+    if label not in LABELS:
+        allowed_patterns = [
+            r"^NC(?:-\d+(?:\.\d+)?ug)?$",
+            r"^F\d+(?:[+-]\d+)?$",
+            r"^AP-\d+$",
+            r"^Fake-\d+$",
+            r"^PBS-.+",
+            r"^TRE-.+",
+            r"^HPMC-.+",
+            r"^Ficoll-\d+%$",
+            r"^Lym-\d+%$",
+            r"^MK-\d+(?:\.\d+)?$",
+            r"^SD-\d+(?:\.\d+)?(?:\+\d+(?:\.\d+)?)?$",
+            r"^eC-eM$",
+            r"^eMig.+",
+            r"^\d+(?:\.\d+)?um-JT-\d+(?:\.\d+)?ug$",
+            r"^\d+(?:\.\d+)?um-\d+(?:\.\d+)?ug$",
+            r"^\d+%-\d+RPM$",
+            r"^20um一级$",
+            r"^混合后eMig$",
+            r"^预组装beads$",
+            r"^蔗糖-.+",
+        ]
+        if not any(re.fullmatch(pattern, label, re.IGNORECASE) for pattern in allowed_patterns):
+            return False
+    junk_fragments = (
+        "Arial",
+        "Sans",
+        "Serif",
+        "Wing",
+        "Gothic",
+        "Times",
+        "Calibri",
+        "Font",
+        "Helvetica",
+        "Mono",
+        "Book",
+        "Italic",
+        "Roman",
+        "Symbol",
+        "Heiti",
+        "Hira",
+        "222",
+        "乮",
+        "乯",
+        "牋",
+        "栽",
+        "梃",
+        "鱊",
+        "览",
+        "惪",
+    )
+    if any(fragment in label for fragment in junk_fragments):
+        return False
+    return label.lower() not in {"emig", "pbs", "plasmid", "ww", "sw", "ic", "en", "qa"}
+
+
+def plausible_single_label(label: str) -> bool:
+    return bool(re.search(r"(?:\d+\s*ug|\d+%-\d+RPM|NC-\d+ug)", label, re.IGNORECASE))
+
+
+def discover_label_values(contents: bytes) -> dict[str, tuple[str, list[float], int]]:
+    discovered: dict[str, tuple[str, list[float], int]] = {}
+    for off in range(115000, len(contents) - 104):
+        v1 = struct.unpack("<f", contents[off : off + 4])[0]
+        if not 0.5 <= v1 <= 100:
+            continue
+        label = label_before_value(contents, off)
+        if not plausible_group_label(label):
+            continue
+        v2_48 = struct.unpack("<f", contents[off + 48 : off + 52])[0]
+        v3_96 = struct.unpack("<f", contents[off + 96 : off + 100])[0]
+        if 0.5 <= v2_48 <= 100 and 0.5 <= v3_96 <= 100:
+            values = [v1, v2_48, v3_96]
+            discovered.setdefault(label, ("3-level gradient", values, off))
+            continue
+        v2_12 = struct.unpack("<f", contents[off + 12 : off + 16])[0]
+        if 0.5 <= v2_12 <= 100:
+            values = [v1, v2_12]
+            discovered.setdefault(label, ("two-replicate comparison", values, off))
+            continue
+        if plausible_single_label(label):
+            discovered.setdefault(label, ("single-value comparison", [v1], off))
+    return discovered
+
+
 def extract_label_values(contents: bytes, label: str) -> tuple[str, list[float], int] | None:
     best: tuple[str, list[float], int] | None = None
     for raw in label_needles(label):
@@ -192,6 +319,17 @@ def extract_label_values(contents: bytes, label: str) -> tuple[str, list[float],
     return best
 
 
+def extract_all_label_values(contents: bytes) -> dict[str, tuple[str, list[float], int]]:
+    rows = discover_label_values(contents)
+    for label in LABELS:
+        if label in CONTROL_LABELS or label in rows:
+            continue
+        extracted = extract_label_values(contents, label)
+        if extracted:
+            rows[label] = extracted
+    return rows
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--ppt", required=True)
@@ -216,21 +354,18 @@ def main() -> int:
             experiment_name = extract_experiment_name(title)
             for ole in slide_ole_targets(zf, no):
                 streams = stream_map(zf.read(ole))
-                is_target, evidence = is_function_ole(streams, title)
-                if not is_target:
+                endpoint, y_axis_title, evidence = classify_endpoint(streams, title)
+                if endpoint is None:
                     excluded.append({"slide": no, "experiment": experiment_name, "source_ole": ole, "reason": evidence})
                     continue
                 contents = streams.get("CONTENTS", b"")
-                for label in LABELS:
-                    if label in CONTROL_LABELS:
-                        continue
-                    extracted = extract_label_values(contents, label)
-                    if not extracted:
-                        continue
+                for label, extracted in extract_all_label_values(contents).items():
                     layout, values, offset = extracted
                     row = {
                         "slide": no,
                         "experiment": experiment_name,
+                        "endpoint": endpoint,
+                        "y_axis_title": y_axis_title,
                         "group": label,
                         "assay_layout": layout,
                         "source": "Prism/OLE original data",
@@ -244,19 +379,24 @@ def main() -> int:
                         "replicate_2_y_pct": "",
                         "mean_y_pct": "",
                         "single_y_pct": "",
+                        "summary_y_pct": "",
                         "knockout_rate_pct_summary": "",
                     }
                     if layout == "3-level gradient" and len(values) >= 3:
                         row["gradient_1_y_pct"] = round(values[0], 6)
                         row["gradient_2_y_pct"] = round(values[1], 6)
                         row["gradient_3_y_pct"] = round(values[2], 6)
-                        row["knockout_rate_pct_summary"] = round(sum(values[:3]) / 3.0, 6)
+                        row["summary_y_pct"] = round(sum(values[:3]) / 3.0, 6)
+                        if endpoint == "knockout_rate_pct":
+                            row["knockout_rate_pct_summary"] = row["summary_y_pct"]
                     elif len(values) >= 2:
                         row["replicate_1_y_pct"] = round(values[0], 6)
                         row["replicate_2_y_pct"] = round(values[1], 6)
                         row["mean_y_pct"] = round(sum(values[:2]) / 2.0, 6)
+                        row["summary_y_pct"] = row["mean_y_pct"]
                     elif len(values) == 1:
                         row["single_y_pct"] = round(values[0], 6)
+                        row["summary_y_pct"] = row["single_y_pct"]
                     rows.append(row)
 
     out = Path(args.out)
@@ -264,6 +404,8 @@ def main() -> int:
     fieldnames = [
         "slide",
         "experiment",
+        "endpoint",
+        "y_axis_title",
         "group",
         "assay_layout",
         "gradient_1_y_pct",
@@ -274,6 +416,7 @@ def main() -> int:
         "replicate_2_y_pct",
         "mean_y_pct",
         "single_y_pct",
+        "summary_y_pct",
         "source",
         "source_ole",
         "selection_evidence",
