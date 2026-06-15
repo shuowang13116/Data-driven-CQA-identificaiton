@@ -46,7 +46,6 @@ def xml_escape(text: str) -> str:
 
 def slide_xml(title: str, slide_no: int) -> str:
     title = xml_escape(title)
-    subtitle = xml_escape(f"Slide {slide_no}")
     return f'''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
   <p:cSld>
@@ -59,14 +58,6 @@ def slide_xml(title: str, slide_no: int) -> str:
         <p:txBody>
           <a:bodyPr wrap="square"/><a:lstStyle/>
           <a:p><a:pPr algn="l"/><a:r><a:rPr lang="zh-CN" sz="3200" b="1"><a:solidFill><a:srgbClr val="111111"/></a:solidFill></a:rPr><a:t>{title}</a:t></a:r></a:p>
-        </p:txBody>
-      </p:sp>
-      <p:sp>
-        <p:nvSpPr><p:cNvPr id="3" name="Instruction"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
-        <p:spPr><a:xfrm><a:off x="640000" y="1400000"/><a:ext cx="11400000" cy="500000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/><a:ln><a:noFill/></a:ln></p:spPr>
-        <p:txBody>
-          <a:bodyPr wrap="square"/><a:lstStyle/>
-          <a:p><a:r><a:rPr lang="zh-CN" sz="1500"><a:solidFill><a:srgbClr val="666666"/></a:solidFill></a:rPr><a:t>{subtitle}: paste the functional Prism plot page here.</a:t></a:r></a:p>
         </p:txBody>
       </p:sp>
     </p:spTree>
