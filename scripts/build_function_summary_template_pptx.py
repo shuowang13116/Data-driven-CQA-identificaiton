@@ -28,14 +28,16 @@ def extract_experiment_name(text: str) -> str | None:
     return None
 
 
-def collect_report_ppts(input_dir: Path, recursive: bool) -> list[Path]:
+def collect_report_ppts(input_dir: Path, recursive: bool, sort_by: str = "name") -> list[Path]:
     files = input_dir.rglob("*") if recursive else input_dir.iterdir()
     reports = [
         p
         for p in files
         if p.is_file() and REPORT_RE.match(p.name) and extract_experiment_name(p.name)
     ]
-    return sorted(reports, key=lambda p: extract_experiment_name(p.name) or "")
+    if sort_by == "experiment":
+        return sorted(reports, key=lambda p: extract_experiment_name(p.name) or "")
+    return sorted(reports, key=lambda p: p.name)
 
 
 def xml_escape(text: str) -> str:
@@ -149,9 +151,13 @@ def main() -> int:
     parser.add_argument("--input-dir", required=True)
     parser.add_argument("--out", required=True)
     parser.add_argument("--recursive", action="store_true")
+    parser.add_argument("--limit", type=int, default=None, help="Only include the first N matching report PPT files.")
+    parser.add_argument("--sort-by", choices=["name", "experiment"], default="name", help="Sort matching report PPT files before applying --limit.")
     args = parser.parse_args()
 
-    reports = collect_report_ppts(Path(args.input_dir), recursive=args.recursive)
+    reports = collect_report_ppts(Path(args.input_dir), recursive=args.recursive, sort_by=args.sort_by)
+    if args.limit is not None:
+        reports = reports[: args.limit]
     if not reports:
         raise SystemExit("No report PPT/PPTX files found.")
     rows = [
