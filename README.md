@@ -4,7 +4,7 @@ Utility scripts and operating notes for extracting CQA/QC features and functiona
 
 ## What This Code Does
 
-- Extract functional assay outputs from experiment-report PPTX files, especially flow-cytometry knockout rate (`knockout_rate_pct`).
+- Extract functional assay outputs from experiment-report PPTX files, especially flow-cytometry knockout rate (`knockout_rate_pct`) and quality-attribute cell share (`cell_share_pct`).
 - Read embedded GraphPad Prism/OLE source data when available, instead of estimating values from screenshots.
 - Summarize assay layouts correctly:
   - two-replicate comparisons -> replicate values plus `mean_y_pct`
@@ -15,7 +15,7 @@ Utility scripts and operating notes for extracting CQA/QC features and functiona
 
 ## Main Scripts
 
-- `scripts/extract_function_pptx_summary.py`: extracts knockout/function Y values from decrypted PowerPoint files containing embedded GraphPad Prism/OLE charts.
+- `scripts/extract_function_pptx_summary.py`: extracts knockout/function Y values and cell-share quality attributes from decrypted PowerPoint files containing embedded GraphPad Prism/OLE charts.
 - `scripts/build_function_summary_template_pptx.py`: builds a title-only functional assay summary PPT template from multiple report PPT filenames, using `DWD-实验名` slide titles and no extra instruction text boxes.
 - `scripts/extract_coulter_summary_pilot.py`: builds pilot Coulter particle-size summary tables from paired report/data exports.
 - `scripts/inspect_function_pptx.py`: inspects slide text, OLE objects, and candidate Prism sources before extraction.
@@ -35,8 +35,10 @@ The manual/Codex workflow for building the functional assay summary is:
 5. Manually standardize Prism plot Y-axis titles, usually to `细胞占比%` and `敲除率（%）`, and remove irrelevant information.
 6. Use Codex to extract functional assay data from the summary PPT:
    - include `敲除率` / knockout / function plots as potency Y
-   - exclude `细胞占比%`, viability, gating, and population-share plots by default
-   - output an Excel/CSV table with experiment names, group labels, assay layout, raw Y values, summaries, source OLE, and selection evidence
+   - include `细胞占比%` plots as quality-attribute columns, not as potency Y
+   - extract every Prism x-axis group that can be read, then mark assay controls instead of deleting them
+   - output an Excel/CSV table with experiment names, group labels, assay layout, raw Y values, summaries, source OLE, selection evidence, and data-check warnings
+   - use the Excel output for manual review; `no antibody no emig`, `wtih/with antibody no emig`, and `1 μg plasmid` assay controls are moved to the bottom and highlighted yellow
 7. Manually review extracted values and group names. Standardize each experiment's control group name to `NC`.
 
 ## Key Extraction Rules
@@ -44,9 +46,9 @@ The manual/Codex workflow for building the functional assay summary is:
 - Process only decrypted, readable PPT/PPTX files.
 - Prefer Prism/OLE original data over image digitization.
 - Select the Prism object by Y-axis title, not by object order.
-- Do not use cell-share or cell-state plots as functional Y.
+- Do not use cell-share or cell-state plots as functional Y; keep `细胞占比%` as separate quality-attribute columns.
 - Keep experimental groups such as `F1-F7`, `F8+9`, `NC`, `PBS-速冻`, and `TRE-慢冻`.
-- Ignore assay controls such as `with antibody no emig`, `wtih antibody no emig`, and `1ug plasmid` unless explicitly requested.
+- Extract assay controls such as `no antibody no emig`, `with antibody no emig`, `wtih antibody no emig`, and `1 μg plasmid`, but mark them as `is_assay_control=TRUE`, move them after the main data rows, and highlight them yellow in Excel.
 - Record the data source as `Prism/OLE original data`, `embedded image digitization estimate`, or `manual/visual estimate`.
 
 Raw experimental files are intentionally not tracked in this repository.

@@ -9,16 +9,31 @@ import zipfile
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
+from openpyxl import Workbook
+from openpyxl.styles import PatternFill
+from openpyxl.utils import get_column_letter
+
 from inspect_ole_cfb import CfbFile, clean_text
 
 
 TEXT_NS = {"a": "http://schemas.openxmlformats.org/drawingml/2006/main"}
 CONTROL_LABELS = {
+    "no antibody no emig",
     "wtih antibody no emig",
     "with antibody no emig",
+    "1 μg plasmid",
+    "1μg plasmid",
+    "1 ug plasmid",
     "1ug plasmid",
 }
 LABELS = [
+    "no antibody no emig",
+    "wtih antibody no emig",
+    "with antibody no emig",
+    "1 μg plasmid",
+    "1μg plasmid",
+    "1 ug plasmid",
+    "1ug plasmid",
     "混合后eMig",
     "预组装beads",
     "eMig直接加Apo",
@@ -199,7 +214,7 @@ def label_before_value(blob: bytes, off: int) -> str:
 
 
 def plausible_group_label(label: str) -> bool:
-    if not label or label in CONTROL_LABELS:
+    if not label:
         return False
     if len(label) > 48:
         return False
@@ -207,31 +222,6 @@ def plausible_group_label(label: str) -> bool:
         return False
     if not re.search(r"[A-Za-z0-9]", label) and label not in LABELS:
         return False
-    if label not in LABELS:
-        allowed_patterns = [
-            r"^NC(?:-\d+(?:\.\d+)?ug)?$",
-            r"^F\d+(?:[+-]\d+)?$",
-            r"^AP-\d+$",
-            r"^Fake-\d+$",
-            r"^PBS-.+",
-            r"^TRE-.+",
-            r"^HPMC-.+",
-            r"^Ficoll-\d+%$",
-            r"^Lym-\d+%$",
-            r"^MK-\d+(?:\.\d+)?$",
-            r"^SD-\d+(?:\.\d+)?(?:\+\d+(?:\.\d+)?)?$",
-            r"^eC-eM$",
-            r"^eMig.+",
-            r"^\d+(?:\.\d+)?um-JT-\d+(?:\.\d+)?ug$",
-            r"^\d+(?:\.\d+)?um-\d+(?:\.\d+)?ug$",
-            r"^\d+%-\d+RPM$",
-            r"^20um一级$",
-            r"^混合后eMig$",
-            r"^预组装beads$",
-            r"^蔗糖-.+",
-        ]
-        if not any(re.fullmatch(pattern, label, re.IGNORECASE) for pattern in allowed_patterns):
-            return False
     junk_fragments = (
         "Arial",
         "Sans",
@@ -258,10 +248,17 @@ def plausible_group_label(label: str) -> bool:
         "鱊",
         "览",
         "惪",
+        "RDC.tmp",
     )
     if any(fragment in label for fragment in junk_fragments):
         return False
-    return label.lower() not in {"emig", "pbs", "plasmid", "ww", "sw", "ic", "en", "qa"}
+    if label.lower() in {"emig", "plasmid", "ww", "sw", "ic", "en", "qa", "stain", "ff"}:
+        return False
+    if re.fullmatch(r"\d+[A-Za-z]", label) and not re.fullmatch(r"\d+(?:\.\d+)?h", label, re.IGNORECASE):
+        return False
+    if re.fullmatch(r"[A-Za-z]+-[\u4e00-\u9fff]{4,}", label):
+        return False
+    return True
 
 
 def plausible_single_label(label: str) -> bool:
@@ -269,7 +266,7 @@ def plausible_single_label(label: str) -> bool:
 
 
 def discover_label_values(contents: bytes) -> dict[str, tuple[str, list[float], int]]:
-    discovered: dict[str, tuple[str, list[float], int]] = {}
+    candidates: list[tuple[int, str, str, list[float]]] = []
     for off in range(115000, len(contents) - 104):
         v1 = struct.unpack("<f", contents[off : off + 4])[0]
         if not 0.5 <= v1 <= 100:
@@ -280,16 +277,38 @@ def discover_label_values(contents: bytes) -> dict[str, tuple[str, list[float], 
         v2_48 = struct.unpack("<f", contents[off + 48 : off + 52])[0]
         v3_96 = struct.unpack("<f", contents[off + 96 : off + 100])[0]
         if 0.5 <= v2_48 <= 100 and 0.5 <= v3_96 <= 100:
-            values = [v1, v2_48, v3_96]
-            discovered.setdefault(label, ("3-level gradient", values, off))
+            candidates.append((off, label, "3-level gradient", [v1, v2_48, v3_96]))
             continue
         v2_12 = struct.unpack("<f", contents[off + 12 : off + 16])[0]
         if 0.5 <= v2_12 <= 100:
-            values = [v1, v2_12]
-            discovered.setdefault(label, ("two-replicate comparison", values, off))
+            candidates.append((off, label, "two-replicate comparison", [v1, v2_12]))
             continue
         if plausible_single_label(label):
-            discovered.setdefault(label, ("single-value comparison", [v1], off))
+            candidates.append((off, label, "single-value comparison", [v1]))
+
+    if not candidates:
+        return {}
+
+    candidates.sort(key=lambda item: item[0])
+    clusters: list[list[tuple[int, str, str, list[float]]]] = []
+    current: list[tuple[int, str, str, list[float]]] = []
+    for candidate in candidates:
+        if current and candidate[0] - current[-1][0] > 900:
+            clusters.append(current)
+            current = []
+        current.append(candidate)
+    if current:
+        clusters.append(current)
+
+    def unique_count(cluster: list[tuple[int, str, str, list[float]]]) -> int:
+        return len({item[1] for item in cluster})
+
+    data_clusters = [cluster for cluster in clusters if unique_count(cluster) >= 2]
+    selected = data_clusters[0] if data_clusters else clusters[0]
+
+    discovered: dict[str, tuple[str, list[float], int]] = {}
+    for off, label, layout, values in selected:
+        discovered.setdefault(label, (layout, values, off))
     return discovered
 
 
@@ -322,12 +341,92 @@ def extract_label_values(contents: bytes, label: str) -> tuple[str, list[float],
 def extract_all_label_values(contents: bytes) -> dict[str, tuple[str, list[float], int]]:
     rows = discover_label_values(contents)
     for label in LABELS:
-        if label in CONTROL_LABELS or label in rows:
+        if label in rows:
             continue
         extracted = extract_label_values(contents, label)
         if extracted:
             rows[label] = extracted
     return rows
+
+
+def normalized_control_label(label: str) -> str:
+    normalized = label.strip().lower()
+    normalized = normalized.replace("μ", "u").replace("µ", "u")
+    normalized = re.sub(r"\s+", " ", normalized)
+    normalized = normalized.replace("1 ug", "1ug")
+    return normalized
+
+
+NORMALIZED_CONTROL_LABELS = {normalized_control_label(label) for label in CONTROL_LABELS}
+
+
+def is_assay_control(label: str) -> bool:
+    return normalized_control_label(label) in NORMALIZED_CONTROL_LABELS
+
+
+def empty_endpoint_data() -> dict[str, object]:
+    return {
+        "assay_layout": "",
+        "values": [],
+        "summary": "",
+        "source_ole": "",
+        "selection_evidence": "",
+        "byte_offset": "",
+    }
+
+
+def summarize_values(layout: str, values: list[float]) -> float | str:
+    if not values:
+        return ""
+    if layout == "3-level gradient" and len(values) >= 3:
+        return round(sum(values[:3]) / 3.0, 6)
+    if len(values) >= 2:
+        return round(sum(values[:2]) / 2.0, 6)
+    return round(values[0], 6)
+
+
+def set_endpoint_columns(row: dict[str, object], prefix: str, data: dict[str, object]) -> None:
+    values = data.get("values") or []
+    if not isinstance(values, list):
+        values = []
+    row[f"{prefix}_assay_layout"] = data.get("assay_layout", "")
+    for idx in range(3):
+        row[f"{prefix}_{idx + 1}_pct"] = round(values[idx], 6) if idx < len(values) else ""
+    row[f"{prefix}_summary_pct"] = data.get("summary", "")
+    row[f"{prefix}_source_ole"] = data.get("source_ole", "")
+    row[f"{prefix}_selection_evidence"] = data.get("selection_evidence", "")
+    row[f"{prefix}_byte_offset_in_contents"] = data.get("byte_offset", "")
+
+
+def write_xlsx(path: Path, rows: list[dict[str, object]], fieldnames: list[str]) -> None:
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "extracted_data"
+    worksheet.append(fieldnames)
+
+    header_fill = PatternFill("solid", fgColor="D9EAF7")
+    control_fill = PatternFill("solid", fgColor="FFF2CC")
+    for cell in worksheet[1]:
+        cell.fill = header_fill
+
+    for row in rows:
+        worksheet.append([row.get(field, "") for field in fieldnames])
+        if row.get("is_assay_control") == "TRUE":
+            for cell in worksheet[worksheet.max_row]:
+                cell.fill = control_fill
+
+    worksheet.freeze_panes = "A2"
+    worksheet.auto_filter.ref = worksheet.dimensions
+    for col_idx, field in enumerate(fieldnames, start=1):
+        max_len = len(field)
+        for row_idx in range(2, min(worksheet.max_row, 200) + 1):
+            value = worksheet.cell(row_idx, col_idx).value
+            if value is not None:
+                max_len = max(max_len, len(str(value)))
+        worksheet.column_dimensions[get_column_letter(col_idx)].width = min(max(max_len + 2, 10), 42)
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    workbook.save(path)
 
 
 def main() -> int:
@@ -352,6 +451,10 @@ def main() -> int:
             no = slide_no(slide)
             title = slide_text(zf, slide)
             experiment_name = extract_experiment_name(title)
+            endpoint_rows: dict[str, dict[str, dict[str, object]]] = {
+                "knockout_rate_pct": {},
+                "cell_share_pct": {},
+            }
             for ole in slide_ole_targets(zf, no):
                 streams = stream_map(zf.read(ole))
                 endpoint, y_axis_title, evidence = classify_endpoint(streams, title)
@@ -361,77 +464,87 @@ def main() -> int:
                 contents = streams.get("CONTENTS", b"")
                 for label, extracted in extract_all_label_values(contents).items():
                     layout, values, offset = extracted
-                    row = {
-                        "slide": no,
-                        "experiment": experiment_name,
-                        "endpoint": endpoint,
-                        "y_axis_title": y_axis_title,
-                        "group": label,
+                    endpoint_rows[endpoint][label] = {
                         "assay_layout": layout,
-                        "source": "Prism/OLE original data",
+                        "values": values,
+                        "summary": summarize_values(layout, values),
                         "source_ole": ole,
                         "selection_evidence": evidence,
-                        "byte_offset_in_contents": offset,
-                        "gradient_1_y_pct": "",
-                        "gradient_2_y_pct": "",
-                        "gradient_3_y_pct": "",
-                        "replicate_1_y_pct": "",
-                        "replicate_2_y_pct": "",
-                        "mean_y_pct": "",
-                        "single_y_pct": "",
-                        "summary_y_pct": "",
-                        "knockout_rate_pct_summary": "",
+                        "byte_offset": offset,
                     }
-                    if layout == "3-level gradient" and len(values) >= 3:
-                        row["gradient_1_y_pct"] = round(values[0], 6)
-                        row["gradient_2_y_pct"] = round(values[1], 6)
-                        row["gradient_3_y_pct"] = round(values[2], 6)
-                        row["summary_y_pct"] = round(sum(values[:3]) / 3.0, 6)
-                        if endpoint == "knockout_rate_pct":
-                            row["knockout_rate_pct_summary"] = row["summary_y_pct"]
-                    elif len(values) >= 2:
-                        row["replicate_1_y_pct"] = round(values[0], 6)
-                        row["replicate_2_y_pct"] = round(values[1], 6)
-                        row["mean_y_pct"] = round(sum(values[:2]) / 2.0, 6)
-                        row["summary_y_pct"] = row["mean_y_pct"]
-                    elif len(values) == 1:
-                        row["single_y_pct"] = round(values[0], 6)
-                        row["summary_y_pct"] = row["single_y_pct"]
-                    rows.append(row)
+
+            all_groups = sorted(set(endpoint_rows["knockout_rate_pct"]) | set(endpoint_rows["cell_share_pct"]))
+            knockout_groups = set(endpoint_rows["knockout_rate_pct"])
+            cell_share_groups = set(endpoint_rows["cell_share_pct"])
+            for group in all_groups:
+                warnings = []
+                if group not in knockout_groups:
+                    warnings.append("missing knockout_rate_pct")
+                if group not in cell_share_groups:
+                    warnings.append("missing cell_share_pct")
+                row = {
+                    "slide": no,
+                    "experiment": experiment_name,
+                    "group": group,
+                    "is_assay_control": "TRUE" if is_assay_control(group) else "FALSE",
+                    "source": "Prism/OLE original data",
+                    "data_check_warning": "; ".join(warnings),
+                }
+                set_endpoint_columns(row, "knockout_rate", endpoint_rows["knockout_rate_pct"].get(group, empty_endpoint_data()))
+                set_endpoint_columns(row, "cell_share", endpoint_rows["cell_share_pct"].get(group, empty_endpoint_data()))
+                rows.append(row)
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     fieldnames = [
         "slide",
         "experiment",
-        "endpoint",
-        "y_axis_title",
         "group",
-        "assay_layout",
-        "gradient_1_y_pct",
-        "gradient_2_y_pct",
-        "gradient_3_y_pct",
-        "knockout_rate_pct_summary",
-        "replicate_1_y_pct",
-        "replicate_2_y_pct",
-        "mean_y_pct",
-        "single_y_pct",
-        "summary_y_pct",
+        "is_assay_control",
         "source",
-        "source_ole",
-        "selection_evidence",
-        "byte_offset_in_contents",
+        "knockout_rate_assay_layout",
+        "knockout_rate_1_pct",
+        "knockout_rate_2_pct",
+        "knockout_rate_3_pct",
+        "knockout_rate_summary_pct",
+        "knockout_rate_source_ole",
+        "knockout_rate_selection_evidence",
+        "knockout_rate_byte_offset_in_contents",
+        "cell_share_assay_layout",
+        "cell_share_1_pct",
+        "cell_share_2_pct",
+        "cell_share_3_pct",
+        "cell_share_summary_pct",
+        "cell_share_source_ole",
+        "cell_share_selection_evidence",
+        "cell_share_byte_offset_in_contents",
+        "data_check_warning",
     ]
-    with out.open("w", encoding="utf-8-sig", newline="") as fh:
+    rows.sort(
+        key=lambda row: (
+            row.get("is_assay_control") == "TRUE",
+            int(row.get("slide") or 0),
+            str(row.get("experiment") or ""),
+            str(row.get("group") or ""),
+        )
+    )
+
+    csv_out = out if out.suffix.lower() != ".xlsx" else out.with_suffix(".csv")
+    xlsx_out = out if out.suffix.lower() == ".xlsx" else out.with_suffix(".xlsx")
+
+    with csv_out.open("w", encoding="utf-8-sig", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
-    excluded_out = out.with_name(out.stem + "-excluded_ole.csv")
+    write_xlsx(xlsx_out, rows, fieldnames)
+
+    excluded_out = csv_out.with_name(csv_out.stem + "-excluded_ole.csv")
     with excluded_out.open("w", encoding="utf-8-sig", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=["slide", "experiment", "source_ole", "reason"])
         writer.writeheader()
         writer.writerows(excluded)
-    print(f"Wrote {len(rows)} extracted rows to {out}")
+    print(f"Wrote {len(rows)} extracted rows to {csv_out}")
+    print(f"Wrote {len(rows)} extracted rows to {xlsx_out}")
     print(f"Wrote {len(excluded)} excluded OLE rows to {excluded_out}")
     return 0
 
