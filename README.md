@@ -16,6 +16,7 @@ Utility scripts and operating notes for extracting CQA/QC features and functiona
 ## Main Scripts
 
 - `scripts/extract_function_pptx_summary.py`: extracts knockout/function Y values from decrypted PowerPoint files containing embedded GraphPad Prism/OLE charts.
+- `scripts/build_function_summary_template_pptx.py`: builds a title-only functional assay summary PPT template from multiple report PPT filenames, using `DWD-实验名` slide titles.
 - `scripts/extract_coulter_summary_pilot.py`: builds pilot Coulter particle-size summary tables from paired report/data exports.
 - `scripts/inspect_function_pptx.py`: inspects slide text, OLE objects, and candidate Prism sources before extraction.
 - `scripts/inspect_ole_cfb.py`: reads OLE compound-file streams embedded inside PPTX files.

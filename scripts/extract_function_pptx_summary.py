@@ -79,7 +79,7 @@ def slide_text(zf: zipfile.ZipFile, slide_xml: str) -> str:
 def extract_experiment_name(raw_slide_title: str) -> str:
     normalized = re.sub(r"\s*\|\s*", "-", raw_slide_title)
     normalized = re.sub(r"\s+", " ", normalized).strip()
-    match = re.search(r"(DWD-.+?)-王硕-\d{8}", normalized)
+    match = re.search(r"(DWD-.+?)-王硕(?:-\d{8})?", normalized)
     if match:
         return match.group(1).strip("- ")
     match = re.search(r"(DWD-.+?)(?:-敲除率|-细胞占比|-保密信息|$)", normalized)
