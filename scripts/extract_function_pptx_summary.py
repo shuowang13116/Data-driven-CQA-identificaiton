@@ -76,6 +76,18 @@ def slide_text(zf: zipfile.ZipFile, slide_xml: str) -> str:
     return " | ".join(node.text for node in root.findall(".//a:t", TEXT_NS) if node.text)
 
 
+def extract_experiment_name(raw_slide_title: str) -> str:
+    normalized = re.sub(r"\s*\|\s*", "-", raw_slide_title)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    match = re.search(r"(DWD-.+?)-王硕-\d{8}", normalized)
+    if match:
+        return match.group(1).strip("- ")
+    match = re.search(r"(DWD-.+?)(?:-敲除率|-细胞占比|-保密信息|$)", normalized)
+    if match:
+        return match.group(1).strip("- ")
+    return raw_slide_title
+
+
 def slide_ole_targets(zf: zipfile.ZipFile, no: int) -> list[str]:
     rel_name = f"ppt/slides/_rels/slide{no}.xml.rels"
     if rel_name not in zf.namelist():
@@ -201,11 +213,12 @@ def main() -> int:
         for slide in slides:
             no = slide_no(slide)
             title = slide_text(zf, slide)
+            experiment_name = extract_experiment_name(title)
             for ole in slide_ole_targets(zf, no):
                 streams = stream_map(zf.read(ole))
                 is_target, evidence = is_function_ole(streams, title)
                 if not is_target:
-                    excluded.append({"slide": no, "experiment": title, "source_ole": ole, "reason": evidence})
+                    excluded.append({"slide": no, "experiment": experiment_name, "source_ole": ole, "reason": evidence})
                     continue
                 contents = streams.get("CONTENTS", b"")
                 for label in LABELS:
@@ -217,7 +230,7 @@ def main() -> int:
                     layout, values, offset = extracted
                     row = {
                         "slide": no,
-                        "experiment": title,
+                        "experiment": experiment_name,
                         "group": label,
                         "assay_layout": layout,
                         "source": "Prism/OLE original data",
