@@ -17,6 +17,7 @@ from inspect_ole_cfb import CfbFile, clean_text
 
 
 TEXT_NS = {"a": "http://schemas.openxmlformats.org/drawingml/2006/main"}
+LABEL_ATOM_PATTERN = r"[A-Za-z0-9_()+%.\-\u4e00-\u9fffμµ]+"
 CONTROL_LABELS = {
     "no antibody no emig",
     "wtih antibody no emig",
@@ -187,7 +188,7 @@ def label_before_value(blob: bytes, off: int) -> str:
     raw = blob[max(0, off - 96) : off]
     text = raw.decode("gb18030", errors="ignore")
     text = "".join(ch if ch.isprintable() else " " for ch in text)
-    tokens = re.findall(r"[A-Za-z0-9_()+%.\-]*[\u4e00-\u9fffA-Za-z][A-Za-z0-9_()+%.\-\u4e00-\u9fff]*", text)
+    tokens = re.findall(LABEL_ATOM_PATTERN, text)
     junk = {
         "MT",
         "ITC",
@@ -209,8 +210,35 @@ def label_before_value(blob: bytes, off: int) -> str:
         "RDC.tmp",
         "ZDingbats",
     }
-    tokens = [tok for tok in tokens if tok not in junk and len(tok) >= 2]
-    return tokens[-1].strip("-") if tokens else ""
+    tokens = [
+        tok
+        for tok in tokens
+        if tok not in junk and (len(tok) >= 2 or re.fullmatch(r"\d+(?:\.\d+)?", tok))
+    ]
+    if not tokens:
+        return ""
+
+    lower_tokens = [tok.lower() for tok in tokens]
+    for size in range(min(5, len(tokens)), 1, -1):
+        candidate = " ".join(tokens[-size:])
+        if is_assay_control(candidate):
+            return candidate.strip("- ")
+
+    if lower_tokens[-1] in {"effect"} and len(tokens) >= 2:
+        return " ".join(tokens[-2:]).strip("- ")
+    if lower_tokens[-1] == "emig" and len(tokens) >= 4 and lower_tokens[-4:-1] in (
+        ["no", "antibody", "no"],
+        ["with", "antibody", "no"],
+        ["wtih", "antibody", "no"],
+    ):
+        return " ".join(tokens[-4:]).strip("- ")
+    if lower_tokens[-1] == "plasmid" and len(tokens) >= 2:
+        if re.search(r"(?:\d+\s*)?[μµu]g$", tokens[-2], re.IGNORECASE):
+            return " ".join(tokens[-2:]).strip("- ")
+        if len(tokens) >= 3 and re.fullmatch(r"\d+", tokens[-3]) and re.fullmatch(r"[μµu]g", tokens[-2], re.IGNORECASE):
+            return " ".join(tokens[-3:]).strip("- ")
+
+    return tokens[-1].strip("-")
 
 
 def plausible_group_label(label: str) -> bool:
@@ -218,7 +246,7 @@ def plausible_group_label(label: str) -> bool:
         return False
     if len(label) > 48:
         return False
-    if not re.fullmatch(r"[A-Za-z0-9_()+%.\-\u4e00-\u9fff]+", label):
+    if not re.fullmatch(rf"{LABEL_ATOM_PATTERN}(?: {LABEL_ATOM_PATTERN})*", label):
         return False
     if not re.search(r"[A-Za-z0-9]", label) and label not in LABELS:
         return False
@@ -473,10 +501,16 @@ def main() -> int:
                         "byte_offset": offset,
                     }
 
-            all_groups = sorted(set(endpoint_rows["knockout_rate_pct"]) | set(endpoint_rows["cell_share_pct"]))
+            all_groups = []
+            seen_groups = set()
+            for endpoint in ("knockout_rate_pct", "cell_share_pct"):
+                for group in endpoint_rows[endpoint]:
+                    if group not in seen_groups:
+                        all_groups.append(group)
+                        seen_groups.add(group)
             knockout_groups = set(endpoint_rows["knockout_rate_pct"])
             cell_share_groups = set(endpoint_rows["cell_share_pct"])
-            for group in all_groups:
+            for group_idx, group in enumerate(all_groups):
                 warnings = []
                 if group not in knockout_groups:
                     warnings.append("missing knockout_rate_pct")
@@ -486,6 +520,7 @@ def main() -> int:
                     "slide": no,
                     "experiment": experiment_name,
                     "group": group,
+                    "group_order": group_idx + 1,
                     "is_assay_control": "TRUE" if is_assay_control(group) else "FALSE",
                     "source": "Prism/OLE original data",
                     "data_check_warning": "; ".join(warnings),
@@ -500,6 +535,7 @@ def main() -> int:
         "slide",
         "experiment",
         "group",
+        "group_order",
         "is_assay_control",
         "source",
         "knockout_rate_assay_layout",
@@ -524,8 +560,7 @@ def main() -> int:
         key=lambda row: (
             row.get("is_assay_control") == "TRUE",
             int(row.get("slide") or 0),
-            str(row.get("experiment") or ""),
-            str(row.get("group") or ""),
+            int(row.get("group_order") or 0),
         )
     )
 

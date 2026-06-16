@@ -36,7 +36,7 @@ The manual/Codex workflow for building the functional assay summary is:
 6. Use Codex to extract functional assay data from the summary PPT:
    - include `敲除率` / knockout / function plots as potency Y
    - include `细胞占比%` plots as quality-attribute columns, not as potency Y
-   - extract every Prism x-axis group that can be read, then mark assay controls instead of deleting them
+   - extract every Prism x-axis group that can be read, including pure numeric labels such as `0`/`1` and multi-word labels such as `Ficoll effect`, then mark assay controls instead of deleting them
    - output an Excel/CSV table with experiment names, group labels, assay layout, raw Y values, summaries, source OLE, selection evidence, and data-check warnings
    - use the Excel output for manual review; `no antibody no emig`, `wtih/with antibody no emig`, and `1 μg plasmid` assay controls are moved to the bottom and highlighted yellow
 7. Manually review extracted values and group names. Standardize each experiment's control group name to `NC`.
@@ -47,6 +47,7 @@ The manual/Codex workflow for building the functional assay summary is:
 - Prefer Prism/OLE original data over image digitization.
 - Select the Prism object by Y-axis title, not by object order.
 - Do not use cell-share or cell-state plots as functional Y; keep `细胞占比%` as separate quality-attribute columns.
+- Treat Prism x-axis labels as source data; numeric labels and labels containing spaces are valid group names.
 - Keep experimental groups such as `F1-F7`, `F8+9`, `NC`, `PBS-速冻`, and `TRE-慢冻`.
 - Extract assay controls such as `no antibody no emig`, `with antibody no emig`, `wtih antibody no emig`, and `1 μg plasmid`, but mark them as `is_assay_control=TRUE`, move them after the main data rows, and highlight them yellow in Excel.
 - Record the data source as `Prism/OLE original data`, `embedded image digitization estimate`, or `manual/visual estimate`.
