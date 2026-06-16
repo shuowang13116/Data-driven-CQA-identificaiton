@@ -17,7 +17,6 @@ from inspect_ole_cfb import CfbFile, clean_text
 
 
 TEXT_NS = {"a": "http://schemas.openxmlformats.org/drawingml/2006/main"}
-LABEL_ATOM_PATTERN = r"[A-Za-z0-9_()+%.\-\u4e00-\u9fffμµ]+"
 CONTROL_LABELS = {
     "no antibody no emig",
     "wtih antibody no emig",
@@ -165,12 +164,24 @@ def find_positions(blob: bytes, needle: bytes) -> list[int]:
 
 
 def looks_embedded_in_longer_label(blob: bytes, idx: int, raw: bytes) -> bool:
+    label_adjacent = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_()+%.-"
+    prev = blob[idx - 1 : idx] if idx > 0 else b""
+    nxt = blob[idx + len(raw) : idx + len(raw) + 1]
+    if (prev and (prev in label_adjacent or prev[0] >= 0x80)) or (nxt and (nxt in label_adjacent or nxt[0] >= 0x80)):
+        return True
+    if prev == b" " and idx >= 2:
+        prev2 = blob[idx - 2 : idx - 1]
+        if prev2 and (prev2 in label_adjacent or prev2[0] >= 0x80):
+            return True
+    if nxt == b" " and idx + len(raw) + 1 < len(blob):
+        nxt2 = blob[idx + len(raw) + 1 : idx + len(raw) + 2]
+        if nxt2 and (nxt2 in label_adjacent or nxt2[0] >= 0x80):
+            return True
     if not re.fullmatch(rb"[A-Za-z]+\d*", raw):
         return False
-    nxt = idx + len(raw)
-    if nxt >= len(blob):
-        return False
-    return blob[nxt : nxt + 1] in b"+-0123456789"
+    if nxt and nxt in b"+-0123456789":
+        return True
+    return False
 
 
 def candidate_floats(blob: bytes, idx: int) -> list[tuple[int, float]]:
@@ -188,67 +199,27 @@ def label_before_value(blob: bytes, off: int) -> str:
     raw = blob[max(0, off - 96) : off]
     text = raw.decode("gb18030", errors="ignore")
     text = "".join(ch if ch.isprintable() else " " for ch in text)
-    tokens = re.findall(LABEL_ATOM_PATTERN, text)
-    junk = {
-        "MT",
-        "ITC",
-        "New",
-        "BT",
-        "BISansCond",
-        "Light",
-        "Gisha",
-        "Sans",
-        "Arial",
-        "Qa",
-        "en",
-        "HY",
-        "HGS",
-        "M-PRO",
-        "oPOP",
-        "Typewriter",
-        "CharterITCReg",
-        "RDC.tmp",
-        "ZDingbats",
-    }
-    tokens = [
-        tok
-        for tok in tokens
-        if tok not in junk and (len(tok) >= 2 or re.fullmatch(r"\d+(?:\.\d+)?", tok))
-    ]
-    if not tokens:
-        return ""
+    for segment in reversed(re.split(r"\s{2,}", text.strip())):
+        candidate = clean_label_candidate(segment)
+        if plausible_group_label(candidate):
+            return candidate
+    return ""
 
-    lower_tokens = [tok.lower() for tok in tokens]
-    for size in range(min(5, len(tokens)), 1, -1):
-        candidate = " ".join(tokens[-size:])
-        if is_assay_control(candidate):
-            return candidate.strip("- ")
 
-    if lower_tokens[-1] in {"effect"} and len(tokens) >= 2:
-        return " ".join(tokens[-2:]).strip("- ")
-    if lower_tokens[-1] == "emig" and len(tokens) >= 4 and lower_tokens[-4:-1] in (
-        ["no", "antibody", "no"],
-        ["with", "antibody", "no"],
-        ["wtih", "antibody", "no"],
-    ):
-        return " ".join(tokens[-4:]).strip("- ")
-    if lower_tokens[-1] == "plasmid" and len(tokens) >= 2:
-        if re.search(r"(?:\d+\s*)?[μµu]g$", tokens[-2], re.IGNORECASE):
-            return " ".join(tokens[-2:]).strip("- ")
-        if len(tokens) >= 3 and re.fullmatch(r"\d+", tokens[-3]) and re.fullmatch(r"[μµu]g", tokens[-2], re.IGNORECASE):
-            return " ".join(tokens[-3:]).strip("- ")
-
-    return tokens[-1].strip("-")
+def clean_label_candidate(text: str) -> str:
+    label = re.sub(r"\s+", " ", text).strip()
+    label = label.strip(" -_:;,\t\r\n")
+    return label
 
 
 def plausible_group_label(label: str) -> bool:
     if not label:
         return False
-    if len(label) > 48:
+    if len(label) > 96:
         return False
-    if not re.fullmatch(rf"{LABEL_ATOM_PATTERN}(?: {LABEL_ATOM_PATTERN})*", label):
+    if is_pure_numeric_label(label):
         return False
-    if not re.search(r"[A-Za-z0-9]", label) and label not in LABELS:
+    if not re.search(r"[A-Za-z0-9\u4e00-\u9fff]", label) and label not in LABELS:
         return False
     junk_fragments = (
         "Arial",
@@ -280,6 +251,10 @@ def plausible_group_label(label: str) -> bool:
     )
     if any(fragment in label for fragment in junk_fragments):
         return False
+    if any(ord(ch) < 32 for ch in label):
+        return False
+    if label.count(" ") > 8:
+        return False
     if label.lower() in {"emig", "plasmid", "ww", "sw", "ic", "en", "qa", "stain", "ff"}:
         return False
     if re.fullmatch(r"\d+[A-Za-z]", label) and not re.fullmatch(r"\d+(?:\.\d+)?h", label, re.IGNORECASE):
@@ -291,6 +266,14 @@ def plausible_group_label(label: str) -> bool:
 
 def plausible_single_label(label: str) -> bool:
     return bool(re.search(r"(?:\d+\s*ug|\d+%-\d+RPM|NC-\d+ug)", label, re.IGNORECASE))
+
+
+def is_pure_numeric_label(label: str) -> bool:
+    return bool(re.fullmatch(r"\d+(?:\.\d+)?", label))
+
+
+def drop_isolated_numeric_labels(rows: dict[str, tuple[str, list[float], int]]) -> dict[str, tuple[str, list[float], int]]:
+    return {label: extracted for label, extracted in rows.items() if not is_pure_numeric_label(label)}
 
 
 def discover_label_values(contents: bytes) -> dict[str, tuple[str, list[float], int]]:
@@ -337,7 +320,7 @@ def discover_label_values(contents: bytes) -> dict[str, tuple[str, list[float], 
     discovered: dict[str, tuple[str, list[float], int]] = {}
     for off, label, layout, values in selected:
         discovered.setdefault(label, (layout, values, off))
-    return discovered
+    return drop_isolated_numeric_labels(discovered)
 
 
 def extract_label_values(contents: bytes, label: str) -> tuple[str, list[float], int] | None:
@@ -373,6 +356,15 @@ def extract_all_label_values(contents: bytes) -> dict[str, tuple[str, list[float
             continue
         extracted = extract_label_values(contents, label)
         if extracted:
+            layout, values, offset = extracted
+            for existing_label, existing in list(rows.items()):
+                existing_layout, existing_values, existing_offset = existing
+                same_values = len(values) == len(existing_values) and all(
+                    abs(a - b) < 1e-5 for a, b in zip(values, existing_values)
+                )
+                if same_values and label.endswith(existing_label):
+                    del rows[existing_label]
+                    break
             rows[label] = extracted
     return rows
 
