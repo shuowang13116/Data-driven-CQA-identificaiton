@@ -1,0 +1,20 @@
+你现在参与的是 Data-driven CQA identification 项目。请先阅读下面这个项目上下文文件，再开始执行我接下来给你的具体任务：
+
+`D:\Migrasome Therapeutics\2.CMC\1. 帝王蝶\2.专项报告\Data-driven CQA identification\Codex\docs\project_agent_onboarding.md`
+
+如果当前对话的可写工作区在 C 盘，请也检查这个镜像位置是否存在同一文件：
+
+`C:\Users\王硕\Documents\CQA identification\docs\project_agent_onboarding.md`
+
+读完后，请用中文简短确认你理解了以下几点：
+
+1. 本项目的目标是把功能实验报告、GraphPad Prism/OLE 数据、Coulter 粒径报告和导出数据整理成可审阅的 CSV/XLSX，用于后续 CQA/QC 数据挖掘。
+2. D 盘 `Codex` 文件夹是最终项目归档位置，C 盘工作区可作为临时编辑沙盒。
+3. Markdown 放 `docs\`，脚本放 `scripts\`，输出表放 `outputs\`，项目 skill 放 `skills\`。
+4. 功能实验数据优先读取嵌入 Prism/OLE 原始数据；必须按 Y 轴标题选择 Prism 对象，不能按对象顺序或数值看起来合理来选。
+5. knockout/function 图作为 potency Y；cell-share、viability、gating、population-state 图默认不能作为 potency Y，只能作为质量属性或另行标注。
+6. assay controls 要保留并标记，不要静默删除；可在 Excel 中移到底部并高亮。
+7. Coulter 汇总是一行一个样本/文件对，把 PDF 报告值和导出粒径数据重算统计放在同一张宽表里。
+8. 不能删除或覆盖原始实验文件；若 PPT/PPTX 加密或不可读，应要求提供解密副本。
+
+确认后，再根据我的具体任务读取相关脚本、输入文件和已有输出。不要只凭记忆操作；先检查本地文件状态。
