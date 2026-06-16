@@ -57,6 +57,8 @@ LABELS = [
     "TRE-effect-eMig",
     "PBS-速冻",
     "PBS-慢冻",
+    "蔗糖-速冻",
+    "蔗糖-慢冻",
     "TRE-速冻",
     "TRE-慢冻",
     "PBS-fake",
